@@ -1,11 +1,11 @@
 import sys
+import numpy as np
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit, QPushButton,
     QVBoxLayout, QHBoxLayout, QMessageBox, QFormLayout, QRadioButton, QButtonGroup, QComboBox
 )
 from PyQt6.QtGui import QDoubleValidator
 from PyQt6.QtCore import Qt
-import numpy as np
 
 # Physical constants
 PLANCK_CONSTANT = 6.62607015e-34      # in J·s
@@ -13,13 +13,17 @@ BOHR_MAGNETON = 9.2740100783e-24      # in J/T
 DEFAULT_GFACTOR = 2.0023
 DEFAULT_RATIO = 28.0  # GHz/T, approx. for g ≈ 2.0023
 
-from sim_nitroxide_spectrum import simulate_nitroxide_spectrum
+def simulate_nitroxide_spectrum(frequency_hz):
+    # Dummy simulation, returns a Gaussian centered around 1.2 T
+    B = np.linspace(1.1, 1.3, 1000)
+    spectrum = np.exp(-((B - 1.2) ** 2) / (2 * (0.01 ** 2)))
+    return B, spectrum
 
 class EPRCalculator(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("EPR Field Calculator")
-        self.setMinimumSize(520, 500)
+        self.setMinimumSize(600, 600)
         self.init_ui()
 
     def init_ui(self):
@@ -46,6 +50,12 @@ class EPRCalculator(QWidget):
         self.sweep_width_input = QLineEdit()
         self.sweep_width_input.setPlaceholderText("e.g. 0.03")
         self.sweep_width_input.setValidator(QDoubleValidator(0.0, 10.0, 6))
+        self.sweep_width_input.setText("0.03")
+
+        self.nutation_bw_input = QLineEdit()
+        self.nutation_bw_input.setPlaceholderText("e.g. 800")
+        self.nutation_bw_input.setValidator(QDoubleValidator(0.0, 5000.0, 2))
+        self.nutation_bw_input.setText("800")
 
         # Radical selector
         self.radical_selector = QComboBox()
@@ -65,7 +75,9 @@ class EPRCalculator(QWidget):
         # Labels
         self.operating_label = QLabel("Operating Frequency: --- GHz")
         self.b0_label = QLabel("B₀: --- T")
-        self.range_label = QLabel("Field Range: --- T")
+        self.sweep_range_label = QLabel("Field Sweep Range: ---")
+        self.nutation_freq_label = QLabel("Frequency Range: ---")
+        self.nutation_field_label = QLabel("Field Range: ---")
 
         # Buttons
         specman_button = QPushButton("Load from SpecMan")
@@ -77,11 +89,14 @@ class EPRCalculator(QWidget):
         default_g_button = QPushButton("Load Default g-Factor")
         default_g_button.clicked.connect(self.load_default_gfactor)
 
-        copy_button = QPushButton("Copy B₀")
+        copy_button = QPushButton("Copy")
         copy_button.clicked.connect(self.copy_b0_to_clipboard)
 
         copy_range_button = QPushButton("Copy Range")
         copy_range_button.clicked.connect(self.copy_range_to_clipboard)
+
+        copy_nutation_button = QPushButton("Copy Nutation Info")
+        copy_nutation_button.clicked.connect(self.copy_nutation_to_clipboard)
 
         send_specman_button = QPushButton("Send Field to SpecMan")
         send_specman_button.clicked.connect(self.send_field_to_specman)
@@ -92,8 +107,9 @@ class EPRCalculator(QWidget):
         form_layout.addRow("IF Frequency (GHz):", self.if_input)
         form_layout.addRow("g-Factor:", self.gfactor_input)
         form_layout.addRow("Field-to-Frequency Ratio (GHz/T):", self.ratio_input)
-        form_layout.addRow("Sweep Width (T):", self.sweep_width_input)
         form_layout.addRow("Radical:", self.radical_selector)
+        form_layout.addRow("Field Sweep Width (T):", self.sweep_width_input)
+        form_layout.addRow("Nutation Bandwidth (MHz):", self.nutation_bw_input)
 
         mode_layout = QVBoxLayout()
         mode_layout.addWidget(self.radio_gfactor)
@@ -107,12 +123,15 @@ class EPRCalculator(QWidget):
         b0_layout = QHBoxLayout()
         b0_layout.addWidget(self.b0_label)
         b0_layout.addWidget(copy_button)
-        b0_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        range_layout = QHBoxLayout()
-        range_layout.addWidget(self.range_label)
-        range_layout.addWidget(copy_range_button)
-        range_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sweep_layout = QHBoxLayout()
+        sweep_layout.addWidget(self.sweep_range_label)
+        sweep_layout.addWidget(copy_range_button)
+
+        nutation_layout = QVBoxLayout()
+        nutation_layout.addWidget(self.nutation_freq_label)
+        nutation_layout.addWidget(self.nutation_field_label)
+        nutation_layout.addWidget(copy_nutation_button)
 
         main_layout = QVBoxLayout()
         main_layout.addWidget(specman_button, alignment=Qt.AlignmentFlag.AlignLeft)
@@ -121,12 +140,13 @@ class EPRCalculator(QWidget):
         main_layout.addWidget(self.operating_label, alignment=Qt.AlignmentFlag.AlignCenter)
         main_layout.addLayout(button_layout)
         main_layout.addLayout(b0_layout)
-        main_layout.addLayout(range_layout)
+        main_layout.addLayout(sweep_layout)
+        main_layout.addLayout(nutation_layout)
         main_layout.addWidget(send_specman_button, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self.setLayout(main_layout)
         self.b0_value_tesla = None
-        self.range_str = ""
+        self.freq_ghz = None
 
     def load_default_gfactor(self):
         self.gfactor_input.setText(str(DEFAULT_GFACTOR))
@@ -136,8 +156,8 @@ class EPRCalculator(QWidget):
             bridge_freq = float(self.bridge_input.text())
             if_freq = float(self.if_input.text())
             freq_ghz = bridge_freq + if_freq
+            self.freq_ghz = freq_ghz
             total_freq_hz = freq_ghz * 1e9
-            sweep_width = float(self.sweep_width_input.text()) if self.sweep_width_input.text() else 0.03
 
             if freq_ghz <= 0:
                 raise ValueError("Total frequency must be positive.")
@@ -146,15 +166,11 @@ class EPRCalculator(QWidget):
 
             if self.radio_gfactor.isChecked():
                 g = float(self.gfactor_input.text())
-                if g <= 0:
-                    raise ValueError("g-factor must be positive.")
                 B0_Tesla = (PLANCK_CONSTANT * total_freq_hz) / (g * BOHR_MAGNETON)
             elif self.radio_ratio.isChecked():
                 ratio = float(self.ratio_input.text())
-                if ratio <= 0:
-                    raise ValueError("Field-to-frequency ratio must be positive.")
                 B0_Tesla = freq_ghz / ratio
-            elif self.radio_sim.isChecked():
+            else:
                 if self.radical_selector.currentText() == "Nitroxide":
                     B, spectrum = simulate_nitroxide_spectrum(total_freq_hz)
                     B0_Tesla = B[np.argmax(spectrum)]
@@ -165,41 +181,57 @@ class EPRCalculator(QWidget):
             self.b0_value_tesla = B0_Tesla
             self.b0_label.setText(f"B₀: {B0_Tesla:.6f} T")
 
-            b0_min = B0_Tesla - sweep_width / 2
-            b0_max = B0_Tesla + sweep_width / 2
-            self.range_str = f"{b0_min:.4f} T to {b0_max:.4f} T"
-            self.range_label.setText(f"Field Range: {self.range_str}")
+            # Sweep range
+            sweep_width = float(self.sweep_width_input.text())
+            sweep_start = B0_Tesla - sweep_width / 2
+            sweep_end = B0_Tesla + sweep_width / 2
+            self.sweep_range_label.setText(f"Field Sweep Range: {sweep_start:.4f} T to {sweep_end:.4f} T")
+
+            # Nutation bandwidth output
+            nut_bw_mhz = float(self.nutation_bw_input.text())
+            freq_start = freq_ghz - nut_bw_mhz / 2000
+            freq_end = freq_ghz + nut_bw_mhz / 2000
+            field_start = sweep_start
+            field_end = sweep_end
+            self.nutation_freq_label.setText(f"Frequency Range: {freq_start:.4f} GHz to {freq_end:.4f} GHz")
+            self.nutation_field_label.setText(f"Field Range: {field_start:.4f} T to {field_end:.4f} T")
 
         except Exception as e:
             QMessageBox.critical(self, "Input Error", str(e))
-            self.b0_label.setText("B₀: --- T")
-            self.range_label.setText("Field Range: --- T")
-            self.b0_value_tesla = None
-            self.range_str = ""
 
     def copy_b0_to_clipboard(self):
         if self.b0_value_tesla is not None:
-            text = f"{self.b0_value_tesla:.6f} T"
-            QApplication.clipboard().setText(text)
-        else:
-            QMessageBox.information(self, "No Value", "Please calculate B₀ first.")
+            QApplication.clipboard().setText(f"{self.b0_value_tesla:.6f} T")
 
     def copy_range_to_clipboard(self):
-        if self.range_str:
-            QApplication.clipboard().setText(self.range_str)
-        else:
-            QMessageBox.information(self, "No Range", "Please calculate B₀ first.")
+        try:
+            sweep_width = float(self.sweep_width_input.text())
+            start = self.b0_value_tesla - sweep_width / 2
+            end = self.b0_value_tesla + sweep_width / 2
+            QApplication.clipboard().setText(f"{start:.4f} T to {end:.4f} T")
+        except:
+            pass
+
+    def copy_nutation_to_clipboard(self):
+        try:
+            nut_bw_mhz = float(self.nutation_bw_input.text())
+            freq_start = self.freq_ghz - nut_bw_mhz / 2000
+            freq_end = self.freq_ghz + nut_bw_mhz / 2000
+            sweep_width = float(self.sweep_width_input.text())
+            field_start = self.b0_value_tesla - sweep_width / 2
+            field_end = self.b0_value_tesla + sweep_width / 2
+            text = f"{freq_start:.4f} GHz to {freq_end:.4f} GHz\n{field_start:.4f} T to {field_end:.4f} T"
+            QApplication.clipboard().setText(text)
+        except:
+            pass
 
     def load_from_specman(self):
         self.bridge_input.setText("9.5")
         self.if_input.setText("0.5")
-        print("Loaded placeholder values from SpecMan (9.5 GHz + 0.5 GHz).")
 
     def send_field_to_specman(self):
         if self.b0_value_tesla is not None:
             print(f"Sending B₀ = {self.b0_value_tesla:.6f} T to SpecMan...")
-        else:
-            QMessageBox.information(self, "No Value", "Please calculate B₀ before sending to SpecMan.")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
