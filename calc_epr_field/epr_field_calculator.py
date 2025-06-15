@@ -5,12 +5,15 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QDoubleValidator
 from PyQt6.QtCore import Qt
+import numpy as np
 
 # Physical constants
 PLANCK_CONSTANT = 6.62607015e-34      # in J·s
 BOHR_MAGNETON = 9.2740100783e-24      # in J/T
 DEFAULT_GFACTOR = 2.0023
 DEFAULT_RATIO = 28.0  # GHz/T, approx. for g ≈ 2.0023
+
+from sim_nitroxide_spectrum import simulate_nitroxide_spectrum
 
 class EPRCalculator(QWidget):
     def __init__(self):
@@ -47,11 +50,13 @@ class EPRCalculator(QWidget):
         # Mode selection
         self.radio_gfactor = QRadioButton("Use g-Factor")
         self.radio_ratio = QRadioButton("Use Field-to-Frequency Ratio (GHz/T)")
+        self.radio_sim = QRadioButton("Use Simulation")
         self.radio_gfactor.setChecked(True)
 
         self.mode_group = QButtonGroup()
         self.mode_group.addButton(self.radio_gfactor)
         self.mode_group.addButton(self.radio_ratio)
+        self.mode_group.addButton(self.radio_sim)
 
         # Labels
         self.operating_label = QLabel("Operating Frequency: --- GHz")
@@ -84,6 +89,7 @@ class EPRCalculator(QWidget):
         mode_layout = QVBoxLayout()
         mode_layout.addWidget(self.radio_gfactor)
         mode_layout.addWidget(self.radio_ratio)
+        mode_layout.addWidget(self.radio_sim)
 
         button_layout = QHBoxLayout()
         button_layout.addWidget(calc_button)
@@ -126,11 +132,20 @@ class EPRCalculator(QWidget):
                 if g <= 0:
                     raise ValueError("g-factor must be positive.")
                 B0_Tesla = (PLANCK_CONSTANT * total_freq_hz) / (g * BOHR_MAGNETON)
-            else:
+            elif self.radio_ratio.isChecked():
                 ratio = float(self.ratio_input.text())
                 if ratio <= 0:
                     raise ValueError("Field-to-frequency ratio must be positive.")
                 B0_Tesla = freq_ghz / ratio
+            elif self.radio_sim.isChecked():
+                if self.radical_selector.currentText() == "Nitroxide":
+                    B, spectrum = simulate_nitroxide_spectrum(total_freq_hz)
+                    B0_Tesla = B[np.argmax(spectrum)]
+                else:
+                    g = 2.0026
+                    B0_Tesla = (PLANCK_CONSTANT * total_freq_hz) / (g * BOHR_MAGNETON)
+            else:
+                raise ValueError("No mode selected.")
 
             self.b0_label.setText(f"B₀: {B0_Tesla:.6f} T")
             self.b0_value_tesla = B0_Tesla
